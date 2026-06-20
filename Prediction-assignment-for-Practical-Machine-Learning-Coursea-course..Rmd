@@ -1,0 +1,115 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+title: "Prediction Assignment for Practical Machine Learning Course"
+
+author: "ITguy666"
+
+date: "2026-06-20"
+
+## Data Loading and Processing
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(caret)
+library(randomForest)
+library(gbm)
+library(data.table)
+library(dplyr)
+
+# Download files
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",destfile="training.csv",method = "curl")
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",destfile="testing.csv",method = "curl")
+
+# Read directly from the web to bypass local file errors
+training1 <- read.csv("training.csv",na.strings=c('#DIV/0!', '', 'NA'))
+testing1  <- read.csv("testing.csv",na.strings=c('#DIV/0!', '', 'NA'))
+
+# Check dimensions to confirm successful loading
+dim(training1)
+```
+
+## Data Cleaning & Variable Selection
+
+To prevent overfitting and reduce training time, we remove irrelevant features. Columns with more than 95% NA values will be removed, as well as near-zero variance predictors.
+
+```{r}
+#Remove Near-Zero Variance predictors
+nzv_metrics <- nearZeroVar(training1, saveMetrics = TRUE)
+training2 <- training1[, nzv_metrics$nzv == FALSE]
+
+# Remove columns with vast majority missing values
+na_threshold <- sapply(training2, function(x) mean(is.na(x))) > 0.95
+training2 <- training2[, na_threshold == FALSE]
+
+# Exclude metadata and descriptive identifiers as the first 7 columns store time stamps, 
+# user names, and window sequences. These are not relevant for physical activity telemetry.
+training2 <- training2[, -(1:7)]
+training2$classe <- as.factor(training2$classe)
+dim(training2)
+```
+
+With the cleaned up training2 data featuring 53 structured predictors, we split the dataset further into an internal sub-training set (70%) and an internal validation set (30%).
+
+```{r}
+in_train <- createDataPartition(y = training2$classe, p = 0.70, list = FALSE)
+sub_train <- training2[in_train, ]
+sub_validate <- training2[-in_train, ]
+```
+
+## Predictive Modelling
+
+In our trainings, a 5-fold cross-validation strategy within the Caret train control wrapper was deployed to preserve computational resources while maintaining robust tuning metrics.
+
+Two models are built for comparison:
+
+Model 1: Random Forest (Naturally constructs multi-class decision trees and works incredibly well with high-dimensional sensor data).
+
+Model 2: Gradient Boosting Machine (GBM) (Utilized as a baseline comparison model).
+
+```{r}
+fit_control <- trainControl(method = "cv", number = 5, verboseIter = FALSE)
+
+# Model 1: Random Forest
+model_rf <- train(classe ~ ., data = sub_train, method = "rf", trControl = fit_control)
+print(model_rf$finalModel)
+
+# Model 2: GBM
+model_gbm <- train(classe ~ ., data = sub_train, method = "gbm", trControl = fit_control, verbose = FALSE)
+print(model_gbm$finalModel)
+```
+
+## Model Evaluation & Out-of-Sample Error
+
+We pass the internal validation matrix (sub_validate) through both models to generate accuracy and sample confusion matrix calculations.
+
+```{r}
+# Evaluate Random Forest Model 1
+pred_rf <- predict(model_rf, sub_validate)
+matrix_rf <- confusionMatrix(pred_rf, sub_validate$classe)
+print(matrix_rf$overall['Accuracy'])
+
+# Evaluate GBM Model 2
+pred_gbm <- predict(model_gbm, sub_validate)
+matrix_gbm <- confusionMatrix(pred_gbm, sub_validate$classe)
+print(matrix_gbm$overall['Accuracy'])
+```
+
+## Final Model Selection & Expected Error
+
+Comparing both setups, the Random Forest algorithm yielded a superior accuracy rate.Given the exceptionally low error rate, the Random Forest model is selected to compute the final quiz submission.
+
+## Final Course Test Quiz Predictions
+
+We load the raw course testing matrix, extract matching sensor attributes, and output the vector classification answers for the automated evaluation portal.
+
+```{r}
+clean_features <- colnames(training2[, -ncol(training2)])
+final_testing   <- testing1[, clean_features]
+
+quiz_predictions <- predict(model_rf, final_testing)
+quiz_predictions
+```
